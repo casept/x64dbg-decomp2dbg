@@ -27,6 +27,23 @@ struct DecompiledFunction {
     int line_num;
 };
 
+struct StackVar {
+    std::string name;
+    std::string type;
+    int offset;
+};
+
+struct RegVar {
+    std::string name;
+    std::string reg;
+    std::string type;
+};
+
+struct FunctionData {
+    std::vector<StackVar> stack_vars;
+    std::vector<RegVar> reg_vars;
+};
+
 class Client {
    public:
     Client() = delete;
@@ -40,6 +57,8 @@ class Client {
     /// Query a detailed decompilation of a function containing the given
     /// module base-relative address.
     DecompiledFunction queryDecompiledFunction(std::size_t addr);
+    /// Query detailed information about a function containing the given address.
+    FunctionData queryFunctionData(std::size_t addr);
 
    private:
     void log(const std::string& msg);

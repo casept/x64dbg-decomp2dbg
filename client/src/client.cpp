@@ -5,6 +5,7 @@
 
 #include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -138,4 +139,82 @@ DecompiledFunction Client::queryDecompiledFunction(std::size_t addr) {
         std::string err = std::string("Failed to query function decompilation: ") + e.what();
         throw std::runtime_error(err);
     }
+}
+
+FunctionData Client::queryFunctionData(std::size_t addr) {
+    log("Querying function data...");
+    FunctionData fd{};
+    try {
+        xmlrpc_c::clientSimple c{};
+        xmlrpc_c::value out;
+        c.call(m_url, "d2d.function_data", xmlrpc_c::paramList().add(xmlrpc_c::value_int(addr)), &out);
+        log("RPC call OK, processing...");
+        auto top_level = xmlrpc_c::value_struct(out.cValue()).cvalue();
+        for (const auto entry : top_level) {
+            if (entry.first == "stack_vars") {
+                log("Found stack_vars, parsing...");
+                auto stack_vars = xmlrpc_c::value_struct(xmlrpc_c::value(entry.second).cValue()).cvalue();
+                for (const auto var : stack_vars) {
+                    StackVar sv;
+                    std::string var_offset = var.first;
+                    log(fmt::format("Stack variable offset: {}", var_offset));
+                    sv.offset = atoi(var_offset.c_str());
+
+                    auto fields = xmlrpc_c::value_struct(xmlrpc_c::value(var.second).cValue()).cvalue();
+                    for (const auto field : fields) {
+                        if (field.first == "name") {
+                            auto name = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                            log(fmt::format("Stack variable name: {}", name));
+                            sv.name = name;
+                        } else if (field.first == "type") {
+                            auto type = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                            log(fmt::format("Stack variable type: {}", type));
+                            sv.type = type;
+                        } else {
+                            throw std::runtime_error(
+                                fmt::format("Encountered unknown register variable field: {}", field.first));
+                        }
+                    }
+                    fd.stack_vars.push_back(sv);
+                }
+            } else if (entry.first == "reg_vars") {
+                log("Found reg_vars, parsing...");
+                auto reg_vars = xmlrpc_c::value_struct(xmlrpc_c::value(entry.second).cValue()).cvalue();
+                for (const auto var : reg_vars) {
+                    RegVar rv;
+                    std::string var_name = var.first;
+                    log(fmt::format("Register variable name: {}", var_name));
+                    rv.name = var_name;
+
+                    auto fields = xmlrpc_c::value_struct(xmlrpc_c::value(var.second).cValue()).cvalue();
+                    for (const auto field : fields) {
+                        if (field.first == "reg_name") {
+                            auto reg_name = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                            log(fmt::format("Register variable register name: {}", reg_name));
+                            rv.reg = reg_name;
+                        } else if (field.first == "type") {
+                            auto type = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                            log(fmt::format("Register variable type: {}", type));
+                            rv.type = type;
+                        } else {
+                            throw std::runtime_error(
+                                fmt::format("Encountered unknown register variable field: {}", field.first));
+                        }
+                    }
+                    fd.reg_vars.push_back(rv);
+                }
+            } else {
+                throw std::runtime_error(fmt::format("Unknown top-level key: {}", entry.first));
+            }
+        }
+    } catch (const std::exception& e) {
+        throw std::runtime_error(fmt::format("Failed to query function data: {}", e.what()));
+    }
+
+    log("Function info query done");
+    return fd;
 }
