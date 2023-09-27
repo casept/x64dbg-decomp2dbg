@@ -1,0 +1,10 @@
+build*/
+.idea/
+.vs/
+.cache/
+.wine/
+cmake-build-*/
+/CMakeSettings.json
+compile_commands.json
+x64dbg/
+checks.json
