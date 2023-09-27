@@ -8,6 +8,8 @@ project(
   LANGUAGES CXX
 )
 
+add_subdirectory(fmt EXCLUDE_FROM_ALL)
+
 add_subdirectory(client EXCLUDE_FROM_ALL)
 
 add_library(decomp2dbg SHARED
@@ -32,7 +34,7 @@ set_target_properties(x64dbgSdkBridge PROPERTIES
 )
 
 
-target_link_libraries(decomp2dbg PRIVATE x64dbgSdk x64dbgSdkBridge client)
+target_link_libraries(decomp2dbg PRIVATE x64dbgSdk x64dbgSdkBridge client fmt::fmt)
 
 # Bumping this to C++20 breaks the SDK
 target_compile_features(decomp2dbg PUBLIC cxx_std_17)

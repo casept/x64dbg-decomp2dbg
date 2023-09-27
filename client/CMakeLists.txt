@@ -6,7 +6,7 @@ add_library(client STATIC
 
 target_include_directories(client PUBLIC "include/")
 target_include_directories(client PRIVATE "${XMLRPC_INCLUDE_DIRS}")
-target_link_libraries(client PRIVATE "${XMLRPC_LIBRARIES}")
+target_link_libraries(client PRIVATE "${XMLRPC_LIBRARIES}" fmt::fmt)
 target_compile_features(client PUBLIC cxx_std_17)
 
 add_executable(clientDemo src/demo_main.cpp)
