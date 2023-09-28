@@ -105,11 +105,9 @@ static bool addDecompSourceAsComment(std::size_t base, std::size_t funcOffset, C
             if (lines_seen.size() > 0) {
                 if (line != lines_seen.back()) {
                     DbgSetAutoCommentAt(addr, line.c_str());
-                    dputs(fmt::format("line: {}", line).c_str());
                 }
             } else {
                 DbgSetAutoCommentAt(addr, line.c_str());
-                dputs(fmt::format("line: {}", line).c_str());
             }
             lines_seen.push_back(line);
         }
@@ -178,47 +176,59 @@ static void cbPopulateDebugInfo(CBTYPE type, void *cbInfo) {
     }
 }
 
-static void cbBreakpoint(CBTYPE type, void *cbInfo) {
-    (void)type;
-    PLUG_CB_BREAKPOINT *bp = reinterpret_cast<PLUG_CB_BREAKPOINT *>(cbInfo);
-    if (bp == nullptr) {
-        dputs("Breakpoint information structure pointer was null, not executing callback!");
-        return;
+static void cbDecompile(CBTYPE type, void *cbInfo) {
+    duint addr;
+    if (type == CB_BREAKPOINT) {
+        // Can obtain IP from context
+        PLUG_CB_BREAKPOINT *bp = reinterpret_cast<PLUG_CB_BREAKPOINT *>(cbInfo);
+        if (bp == nullptr) {
+            dputs("Breakpoint information structure pointer was null, not executing callback!");
+            return;
+        }
+        addr = bp->breakpoint->addr;
+    } else {
+        // Have to obtain IP from register dump
+        REGDUMP regs;
+        if (!DbgGetRegDumpEx(&regs, sizeof(regs))) {
+            dputs("Failed to get register dump, aborting!");
+            return;
+        }
+
+        addr = static_cast<duint>(regs.regcontext.cip);
     }
 
     std::lock_guard<std::mutex>(CTX.l);
 
     if (!CTX.ready) {
-        dputs("Plugin not yet ready to handle breakpoint. Ignoring.");
+        dputs("Plugin not yet ready to handle decompilation. Ignoring.");
         return;
     }
 
     // Is this in the module we care about / have decomp on? Check.
     char modName[MAX_MODULE_SIZE];
-    if (!DbgGetModuleAt(bp->breakpoint->addr, modName)) {
-        dputs("Failed to determine which module breakpoint belongs to, aborting!");
+    if (!DbgGetModuleAt(addr, modName)) {
+        dputs("Failed to determine which module address belongs to, aborting!");
         return;
     }
 
     std::string trimmedName = removeExtension(CTX.modInfo.name);  // Returned module is without ext
     if (std::string(modName) != trimmedName) {
-        dputs(fmt::format("Breakpoint belongs to module {}, we only care about {}. Ignoring.", modName, trimmedName)
+        dputs(fmt::format("Address belongs to module {}, we only care about {}. Ignoring.", modName, trimmedName)
                   .c_str());
         return;
     }
 
     // FIXME: Integrate some kind of caching, as fetching is slow
     // FIXME: Printing for 64 bit
-    dputs(fmt::format("Fetching decomp for BP at addr {:016x}, base-relative {:016x}", bp->breakpoint->addr,
-                      bp->breakpoint->addr - CTX.modInfo.addr)
-              .c_str());
-    DbgSetAutoCommentAt(bp->breakpoint->addr, "Fetching from decompiler...");
+    dputs(
+        fmt::format("Fetching decomp for addr {:016x}, base-relative {:016x}", addr, addr - CTX.modInfo.addr).c_str());
+    DbgSetAutoCommentAt(addr, "Fetching from decompiler...");
     try {
         Client c(CTX.apiUrl.c_str());
-        addDecompSourceAsComment(CTX.modInfo.addr, bp->breakpoint->addr - CTX.modInfo.addr, c);
+        addDecompSourceAsComment(CTX.modInfo.addr, addr - CTX.modInfo.addr, c);
     } catch (const std::exception &e) {
         dputs(fmt::format("Failed to fetch decompiled source: {}", e.what()).c_str());
-        DbgSetAutoCommentAt(bp->breakpoint->addr, "Decompiler fetch failed, see log!");
+        DbgSetAutoCommentAt(addr, "Decompiler fetch failed, see log!");
         return;
     }
 }
@@ -227,7 +237,7 @@ bool pluginInit(PLUG_INITSTRUCT *initStruct) {
     _plugin_registercommand(pluginHandle, PLUGIN_NAME, cbConnectCommand, true);
     _plugin_registercallback(pluginHandle, CB_CREATEPROCESS, cbPopulateDebugInfo);
     _plugin_registercallback(pluginHandle, CB_LOADDLL, cbPopulateDebugInfo);
-    _plugin_registercallback(pluginHandle, CB_BREAKPOINT, cbBreakpoint);
+    _plugin_registercallback(pluginHandle, CB_PAUSEDEBUG, cbDecompile);
 
     CTX.l.lock();
     // TODO: Read this from config
