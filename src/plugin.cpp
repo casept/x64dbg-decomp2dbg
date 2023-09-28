@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <mutex>
 #include <string>
 
 // Same for these headers, as they include them transitively
@@ -13,17 +14,46 @@
 #include <fmt/ranges.h>
 
 #include "plugin.h"
+#include "modules.h"
 
 #include <pluginsdk/_plugins.h>
 #include <pluginsdk/bridgemain.h>
 #include <pluginsdk/dbghelp/dbghelp.h>
+#include <pluginsdk/_scriptapi_module.h>
 
 /* clang-format on */
 
+/// Struct storing global knowledge of the plugin.
+struct Ctx {
+    std::mutex l;        // Lock, as callbacks are concurrent
+    std::string apiUrl;  // URL of the decompiler XMLRPC server
+    Module modInfo;      //  Info about the module we care about
+    bool ready;          // Whether we have all the info needed to start working
+};
+
+Ctx CTX;
+
+/* String utils which should be part of the goddamn stdlib */
+static std::string removeExtension(const std::string &filename) {
+    size_t lastdot = filename.find_last_of(".");
+    if (lastdot == std::string::npos) return filename;
+    return filename.substr(0, lastdot);
+}
+
+static bool hasEnding(std::string const &fullString, std::string const &ending) {
+    if (fullString.length() >= ending.length()) {
+        return (0 == fullString.compare(fullString.length() - ending.length(), ending.length(), ending));
+    } else {
+        return false;
+    }
+}
+
+/* Functions for decorating x64dbg output */
+
 static void addSymbol(Symbol s, std::size_t base) {
-    dputs(fmt::format("Adding symbol {} at {}", s.name, s.addr).c_str());
     std::size_t start = base + s.addr;
     std::size_t end = base + s.addr + s.size;
+    dputs(fmt::format("Adding symbol {} at {:016x}", s.name, start).c_str());
 
     switch (s.type) {
         case SymbolType::Function: {
@@ -50,29 +80,50 @@ static void addSymbol(Symbol s, std::size_t base) {
     }
 }
 
-static void addDecompSourceAsComment(std::size_t base, std::size_t funcAddr, const DecompiledFunction &df) {
-    // Remove any previous auto comments for function
-    DbgClearAutoCommentRange(base + funcAddr, base + funcAddr);
-
-    dputs(fmt::format("Decompiled: line_num: {}, name: {}, source_lines: {}", df.line_num, df.name, df.source.size())
-              .c_str());
-    auto decompStr = fmt::format("DECOMP: {}", fmt::join(df.source, "\n "));
-    if (!DbgSetAutoCommentAt(base + funcAddr, decompStr.c_str())) {
-        dputs(fmt::format("Failed to add decompiled source as comment at {:08x}", base + funcAddr).c_str());
+static bool addDecompSourceAsComment(std::size_t base, std::size_t funcOffset, Client &c) {
+    // Determine bounds of function
+    duint start, end;
+    if (!DbgFunctionGet(base + funcOffset, &start, &end)) {
+        dputs(fmt::format("Failed to show decompiled function at {:016x}: Failed to get function for address",
+                          base + funcOffset)
+                  .c_str());
+        return false;
     }
+
+    dputs(fmt::format("Getting decomp info for function from {:016x} to {:016x}", start, end).c_str());
+
+    // Remove any previous auto comments for function
+    DbgClearAutoCommentRange(start, end);
+
+    // Iterate over all addresses in the function and assign appropriate source
+    std::vector<std::string> lines_seen = {};
+    for (duint addr = start; addr < end; addr++) {
+        auto decomp = c.queryDecompiledFunction(addr - base);
+        if (decomp.line_num != -1) {
+            auto line = fmt::format("DECOMP: {}", decomp.source.at(decomp.line_num));
+            // Without this, we get multiple comments for the same source line
+            if (lines_seen.size() > 0) {
+                if (line != lines_seen.back()) {
+                    DbgSetAutoCommentAt(addr, line.c_str());
+                    dputs(fmt::format("line: {}", line).c_str());
+                }
+            } else {
+                DbgSetAutoCommentAt(addr, line.c_str());
+                dputs(fmt::format("line: {}", line).c_str());
+            }
+            lines_seen.push_back(line);
+        }
+    }
+    return true;
 }
+
+/* Callbacks */
 
 static bool cbConnectCommand(int argc, char **argv) {
     if (argc != 5 || std::string(argv[1]) != "connect") {
         dputs("Usage: " PLUGIN_NAME " connect, host, port");
-
-        // Return false to indicate failure (used for scripting)
         return false;
     }
-
-    // NOTE: Look at x64dbg-sdk/pluginsdk/bridgemain.h for a list of available
-    // functions. The Script:: namespace and DbgFunctions()->... are also good to
-    // check out.
 
     if (std::string(argv[1]) == "connect") {
         auto host = std::string(argv[2]);
@@ -90,21 +141,40 @@ static bool cbConnectCommand(int argc, char **argv) {
     return true;
 }
 
-static void cbCreateProcess(CBTYPE type, void *cbInfo) {
+static void cbPopulateDebugInfo(CBTYPE type, void *cbInfo) {
     (void)type;
     (void)cbInfo;
 
-    // Now we're at a point where our debug info won't be lost, populate it
-    try {
-        Client c("http://localhost:3662/RPC2/");
-        c.ping();
-        auto hdrs = c.queryFunctionHeaders();
-        for (const auto hdr : hdrs) {
-            addSymbol(hdr, 0x00400000);
+    const auto g = std::lock_guard<std::mutex>(CTX.l);
+
+    // If we haven't figured out where the module we're targeting lives yet,
+    // try doing that (again).
+    // TODO: Create config mechanism instead of assuming that main exe is target
+    if (!CTX.ready) {
+        auto mods = getModules();
+        for (const auto mod : mods) {
+            if (hasEnding(mod.name, ".exe")) {
+                CTX.modInfo = mod;
+                CTX.ready = true;
+                dputs(fmt::format("Found target module {} at {:016x}", mod.name, mod.addr).c_str());
+            }
         }
-    } catch (const std::exception &e) {
-        dputs(fmt::format("Failed to query function headers from server: {}", e.what()).c_str());
-        return;
+
+        try {
+            Client c(CTX.apiUrl.c_str());
+            c.ping();
+
+            if (CTX.ready) {
+                // Now we're at a point where our debug info won't be lost, populate it
+                auto hdrs = c.queryFunctionHeaders();
+                for (const auto hdr : hdrs) {
+                    addSymbol(hdr, CTX.modInfo.addr);
+                }
+            }
+        } catch (const std::exception &e) {
+            dputs(fmt::format("Failed to query function headers from server: {}", e.what()).c_str());
+            return;
+        }
     }
 }
 
@@ -116,18 +186,36 @@ static void cbBreakpoint(CBTYPE type, void *cbInfo) {
         return;
     }
 
-    const std::size_t base = 0x00400000;
-    // FIXME: Only decorate if it's in a module we know of (compare bp->breakpoint->mod or so)
+    std::lock_guard<std::mutex>(CTX.l);
+
+    if (!CTX.ready) {
+        dputs("Plugin not yet ready to handle breakpoint. Ignoring.");
+        return;
+    }
+
+    // Is this in the module we care about / have decomp on? Check.
+    char modName[MAX_MODULE_SIZE];
+    if (!DbgGetModuleAt(bp->breakpoint->addr, modName)) {
+        dputs("Failed to determine which module breakpoint belongs to, aborting!");
+        return;
+    }
+
+    std::string trimmedName = removeExtension(CTX.modInfo.name);  // Returned module is without ext
+    if (std::string(modName) != trimmedName) {
+        dputs(fmt::format("Breakpoint belongs to module {}, we only care about {}. Ignoring.", modName, trimmedName)
+                  .c_str());
+        return;
+    }
+
     // FIXME: Integrate some kind of caching, as fetching is slow
     // FIXME: Printing for 64 bit
-    dputs(fmt::format("Fetching decomp for BP at addr {:08x}, base-relative {:08x}", bp->breakpoint->addr,
-                      bp->breakpoint->addr - base)
+    dputs(fmt::format("Fetching decomp for BP at addr {:016x}, base-relative {:016x}", bp->breakpoint->addr,
+                      bp->breakpoint->addr - CTX.modInfo.addr)
               .c_str());
     DbgSetAutoCommentAt(bp->breakpoint->addr, "Fetching from decompiler...");
     try {
-        Client c("http://localhost:3662/RPC2/");
-        auto decomp = c.queryDecompiledFunction(bp->breakpoint->addr - base);
-        addDecompSourceAsComment(base, bp->breakpoint->addr - base, decomp);
+        Client c(CTX.apiUrl.c_str());
+        addDecompSourceAsComment(CTX.modInfo.addr, bp->breakpoint->addr - CTX.modInfo.addr, c);
     } catch (const std::exception &e) {
         dputs(fmt::format("Failed to fetch decompiled source: {}", e.what()).c_str());
         DbgSetAutoCommentAt(bp->breakpoint->addr, "Decompiler fetch failed, see log!");
@@ -135,30 +223,19 @@ static void cbBreakpoint(CBTYPE type, void *cbInfo) {
     }
 }
 
-// Initialize your plugin data here.
 bool pluginInit(PLUG_INITSTRUCT *initStruct) {
     _plugin_registercommand(pluginHandle, PLUGIN_NAME, cbConnectCommand, true);
-    // We need to wait until process creation to load symbols as they're ignored otherwise
-    _plugin_registercallback(pluginHandle, CB_CREATEPROCESS, cbCreateProcess);
+    _plugin_registercallback(pluginHandle, CB_CREATEPROCESS, cbPopulateDebugInfo);
+    _plugin_registercallback(pluginHandle, CB_LOADDLL, cbPopulateDebugInfo);
     _plugin_registercallback(pluginHandle, CB_BREAKPOINT, cbBreakpoint);
+
+    CTX.l.lock();
+    // TODO: Read this from config
+    CTX.apiUrl = "http://localhost:3662/RPC2/";
+    CTX.l.unlock();
     return true;
 }
 
-// Deinitialize your plugin data here.
-// NOTE: you are responsible for gracefully closing your GUI
-// This function is not executed on the GUI thread, so you might need
-// to use WaitForSingleObject or similar to wait for everything to close.
-void pluginStop() {
-    // Prefix of the functions to call here: _plugin_unregister
+void pluginStop() { dprintf("pluginStop(pluginHandle: %d)\n", pluginHandle); }
 
-    dprintf("pluginStop(pluginHandle: %d)\n", pluginHandle);
-}
-
-// Do GUI/Menu related things here.
-// This code runs on the GUI thread: GetCurrentThreadId() ==
-// GuiGetMainThreadId() You can get the HWND using GuiGetWindowHandle()
-void pluginSetup() {
-    // Prefix of the functions to call here: _plugin_menu
-
-    dprintf("pluginSetup(pluginHandle: %d)\n", pluginHandle);
-}
+void pluginSetup() { dprintf("pluginSetup(pluginHandle: %d)\n", pluginHandle); }
