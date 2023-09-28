@@ -7,6 +7,7 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 
 // Same for these headers, as they include them transitively
 #include "client.h"
@@ -29,6 +30,10 @@ struct Ctx {
     std::string apiUrl;  // URL of the decompiler XMLRPC server
     Module modInfo;      //  Info about the module we care about
     bool ready;          // Whether we have all the info needed to start working
+    // Addresses we have already decompiled in this session.
+    // Until we find a smarter way to invalidate caches, this should prevent
+    // the worst of redundant work, at the cost of potentially stale source being shown.
+    std::unordered_set<duint> addrsDecompiled;
 };
 
 Ctx CTX;
@@ -92,13 +97,27 @@ static bool addDecompSourceAsComment(std::size_t base, std::size_t funcOffset, C
 
     dputs(fmt::format("Getting decomp info for function from {:016x} to {:016x}", start, end).c_str());
 
-    // Remove any previous auto comments for function
-    DbgClearAutoCommentRange(start, end);
+    // Check whether any part requires re-decompilation
 
-    // Iterate over all addresses in the function and assign appropriate source
+    for (duint addr = start; addr < end; addr++) {
+        // Have we already decompiled this address?
+        // If so, it should still be visible, and we should avoid the duplicate work.
+        // TODO: Do this at a less granular (i.e. function level).
+        const bool alreadyDecomped = CTX.addrsDecompiled.find(addr) != CTX.addrsDecompiled.end();
+        if (alreadyDecomped) {
+            // Remove any previous decompiler output for function,
+            // we'll (re-)decompile it
+            DbgClearAutoCommentRange(start, end);
+            break;
+        }
+    }
+
+    // Iterate over all addresses in the function and assign appropriate source to each.
+    // FIXME: This is super inefficient, find a better approach to perform this precise mapping.
     std::vector<std::string> lines_seen = {};
     for (duint addr = start; addr < end; addr++) {
         auto decomp = c.queryDecompiledFunction(addr - base);
+        CTX.addrsDecompiled.insert(addr);
         if (decomp.line_num != -1) {
             auto line = fmt::format("DECOMP: {}", decomp.source.at(decomp.line_num));
             // Without this, we get multiple comments for the same source line
