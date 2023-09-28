@@ -134,6 +134,50 @@ static bool addDecompSourceAsComment(std::size_t base, std::size_t funcOffset, C
     return true;
 }
 
+void decompile(duint addr) {
+    std::lock_guard<std::mutex>(CTX.l);
+
+    if (!CTX.ready) {
+        dputs("Plugin not yet ready to handle decompilation. Ignoring.");
+        return;
+    }
+
+    // Is this in the module we care about / have decomp on? Check.
+    char modName[MAX_MODULE_SIZE];
+    if (!DbgGetModuleAt(addr, modName)) {
+        dputs("Failed to determine which module address belongs to, aborting!");
+        return;
+    }
+
+    std::string trimmedName = removeExtension(CTX.modInfo.name);  // Returned module is without ext
+    if (std::string(modName) != trimmedName) {
+        dputs(fmt::format("Address belongs to module {}, we only care about {}. Ignoring.", modName, trimmedName)
+                  .c_str());
+        return;
+    }
+
+    dputs(
+        fmt::format("Fetching decomp for addr {:016x}, base-relative {:016x}", addr, addr - CTX.modInfo.addr).c_str());
+    DbgSetAutoCommentAt(addr, "Fetching from decompiler...");
+    try {
+        Client c(CTX.apiUrl.c_str());
+        if (!addDecompSourceAsComment(CTX.modInfo.addr, addr - CTX.modInfo.addr, c)) {
+            DbgSetAutoCommentAt(addr, "Decompiler fetch failed, see log!");
+        }
+    } catch (const std::exception &e) {
+        DbgSetAutoCommentAt(addr, "Decompiler fetch failed, see log!");
+        throw std::runtime_error(fmt::format("Failed to fetch decompiled source: {}", e.what()));
+        return;
+    }
+}
+
+void decompileRange(duint start, duint end) {
+    // FIXME: This is obviously a super inefficient way to do it.
+    for (duint addr = start; addr <= end; addr++) {
+        decompile(addr);
+    }
+}
+
 /* Callbacks */
 
 static bool cbConnectCommand(int argc, char **argv) {
@@ -184,13 +228,16 @@ static void cbPopulateDebugInfo(CBTYPE type, void *cbInfo) {
             if (CTX.ready) {
                 // Now we're at a point where our debug info won't be lost, populate it
                 auto hdrs = c.queryFunctionHeaders();
+                dputs("Populating functions...");
                 for (const auto hdr : hdrs) {
                     addSymbol(hdr, CTX.modInfo.addr);
                 }
+                dputs("Populating globals...");
                 auto globals = c.queryGlobalVars();
                 for (const auto g : globals) {
                     addSymbol(g, CTX.modInfo.addr);
                 }
+                dputs("Done");
             }
         } catch (const std::exception &e) {
             dputs(fmt::format("Failed to query function headers from server: {}", e.what()).c_str());
@@ -219,48 +266,70 @@ static void cbDecompile(CBTYPE type, void *cbInfo) {
 
         addr = static_cast<duint>(regs.regcontext.cip);
     }
-
-    std::lock_guard<std::mutex>(CTX.l);
-
-    if (!CTX.ready) {
-        dputs("Plugin not yet ready to handle decompilation. Ignoring.");
-        return;
-    }
-
-    // Is this in the module we care about / have decomp on? Check.
-    char modName[MAX_MODULE_SIZE];
-    if (!DbgGetModuleAt(addr, modName)) {
-        dputs("Failed to determine which module address belongs to, aborting!");
-        return;
-    }
-
-    std::string trimmedName = removeExtension(CTX.modInfo.name);  // Returned module is without ext
-    if (std::string(modName) != trimmedName) {
-        dputs(fmt::format("Address belongs to module {}, we only care about {}. Ignoring.", modName, trimmedName)
-                  .c_str());
-        return;
-    }
-
-    // FIXME: Integrate some kind of caching, as fetching is slow
-    // FIXME: Printing for 64 bit
-    dputs(
-        fmt::format("Fetching decomp for addr {:016x}, base-relative {:016x}", addr, addr - CTX.modInfo.addr).c_str());
-    DbgSetAutoCommentAt(addr, "Fetching from decompiler...");
     try {
-        Client c(CTX.apiUrl.c_str());
-        addDecompSourceAsComment(CTX.modInfo.addr, addr - CTX.modInfo.addr, c);
+        decompile(addr);
     } catch (const std::exception &e) {
-        dputs(fmt::format("Failed to fetch decompiled source: {}", e.what()).c_str());
-        DbgSetAutoCommentAt(addr, "Decompiler fetch failed, see log!");
+        dputs(e.what());
         return;
     }
 }
+
+/* GUI functionality */
+
+static void decompileSelection() {
+    // There's no callback for the user navigating the disassembly view without
+    // setting breakpoints or stepping.
+    // In order to nonetheless provide decompilation, we need to
+    // track the user's movements in the CPU/disassembly view
+    // and decompile each time a new function is entered.
+
+    // Trivial check to ensure we don't do massive amounts of work if nothing changed
+    // (i.e. the GUI event causing us to be called was not caused by a disasm selection)
+    static duint lastStart, lastEnd;
+
+    SELECTIONDATA s;
+    GuiSelectionGet(GUI_DISASSEMBLY, &s);
+    if (s.start == lastStart && s.end == lastEnd) {
+        return;
+    }
+    try {
+        decompileRange(s.start, s.end);
+    } catch (const std::exception &e) {
+        dputs(fmt::format("Failed to decompile selection: {}", e.what()).c_str());
+    }
+
+    lastStart = s.start;
+    lastEnd = s.end;
+    GuiUpdateDisassemblyView();
+}
+
+void cbGui(CBTYPE type, void *cbInfo) {
+    (void)type;
+    auto winEvent = reinterpret_cast<PLUG_CB_WINEVENT *>(cbInfo);
+    if (winEvent->message == nullptr) {
+        return;
+    }
+
+    // Could this window event have been triggered by the user
+    // navigating the disassembler view?
+    if (winEvent->message->message != WM_LBUTTONDOWN) {
+        return;
+    }
+
+    // TODO: Check whether disasm view is the currently active view,
+    // once I find the API for it
+
+    GuiExecuteOnGuiThread(decompileSelection);
+}
+
+/* Mandatory exports */
 
 bool pluginInit(PLUG_INITSTRUCT *initStruct) {
     _plugin_registercommand(pluginHandle, PLUGIN_NAME, cbConnectCommand, true);
     _plugin_registercallback(pluginHandle, CB_CREATEPROCESS, cbPopulateDebugInfo);
     _plugin_registercallback(pluginHandle, CB_LOADDLL, cbPopulateDebugInfo);
     _plugin_registercallback(pluginHandle, CB_PAUSEDEBUG, cbDecompile);
+    _plugin_registercallback(pluginHandle, CB_WINEVENT, cbGui);
 
     CTX.l.lock();
     // TODO: Read this from config
