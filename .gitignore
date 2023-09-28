@@ -6,5 +6,5 @@ build*/
 cmake-build-*/
 /CMakeSettings.json
 compile_commands.json
-x64dbg/
+x64dbg/release/
 checks.json
