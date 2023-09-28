@@ -59,6 +59,8 @@ class Client {
     DecompiledFunction queryDecompiledFunction(std::size_t addr);
     /// Query detailed information about a function containing the given address.
     FunctionData queryFunctionData(std::size_t addr);
+    /// Query global variables.
+    std::vector<Symbol> queryGlobalVars();
 
    private:
     void log(const std::string& msg);

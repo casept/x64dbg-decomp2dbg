@@ -85,6 +85,55 @@ std::vector<Symbol> Client::queryFunctionHeaders() {
     }
 }
 
+std::vector<Symbol> Client::queryGlobalVars() {
+    log("Querying global variables");
+    try {
+        xmlrpc_c::clientSimple c{};
+        xmlrpc_c::value out;
+        c.call(m_url, "d2d.global_vars", &out);
+        std::vector<Symbol> symbols;
+        auto top_level = xmlrpc_c::value_struct(out.cValue()).cvalue();
+        // This is a map, where the variable's address is the key
+        for (const auto entry : top_level) {
+            log(fmt::format("Encountered top-level key: {}", entry.first).c_str());
+
+            auto var = xmlrpc_c::value_struct(xmlrpc_c::value(entry.second).cValue()).cvalue();
+            // FIXME: This loses precision, convert directly to size_t
+            std::size_t var_addr;
+            // +2 to ignore the "0x" which from_chars can't parse
+            std::from_chars(entry.first.data() + 2, entry.first.data() + entry.first.size(), var_addr, 16);
+            std::string var_name = "";
+            std::size_t var_size = 0;
+
+            for (const auto entry2 : var) {
+                auto key = entry2.first;
+                log(fmt::format("Encountered variable key: {}", key).c_str());
+                if (key == "name") {
+                    var_name =
+                        static_cast<std::string>(xmlrpc_c::value_string(xmlrpc_c::value(entry2.second).cValue()));
+                    log(fmt::format("Name: {}", var_name).c_str());
+                } else if (key == "size") {
+                    var_size =
+                        static_cast<std::size_t>(xmlrpc_c::value_int(xmlrpc_c::value(entry2.second).cValue()).cvalue());
+                } else {
+                    throw std::runtime_error(fmt::format("Failed to parse response: Unknown key {}", key));
+                }
+            }
+            Symbol s = {
+                .type = SymbolType::Other,
+                .name = var_name,
+                .addr = var_addr,
+                .size = var_size,
+            };
+            symbols.push_back(s);
+        }
+        log("Global variable query OK");
+        return symbols;
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Failed to query global variables: ") + e.what());
+    }
+}
+
 DecompiledFunction Client::queryDecompiledFunction(std::size_t addr) {
     try {
         log("Querying decompiled functions...");

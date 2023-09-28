@@ -53,19 +53,19 @@ static bool hasEnding(std::string const &fullString, std::string const &ending) 
 static void addSymbol(Symbol s, std::size_t base) {
     std::size_t start = base + s.addr;
     std::size_t end = base + s.addr + s.size;
-    dputs(fmt::format("Adding symbol {} at {:016x}", s.name, start).c_str());
 
     switch (s.type) {
         case SymbolType::Function: {
             // Clear any previous auto function here from previous runs
             DbgClearAutoFunctionRange(start, end);
             if (!DbgSetAutoFunctionAt(start, end)) {
-                dputs("Failed to add function!");
+                dputs(fmt::format("Failed to add function {} at {:016x}-{:016x}!", s.name, start, end).c_str());
             }
 
             DbgClearAutoLabelRange(start, end);
             if (!DbgSetAutoLabelAt(start, s.name.c_str())) {
-                dputs("Failed to set function name!");
+                dputs(
+                    fmt::format("Failed to set function name for {} at {:016x}-{:016x}!", s.name, start, end).c_str());
             }
             break;
         }
@@ -73,7 +73,7 @@ static void addSymbol(Symbol s, std::size_t base) {
             // TODO: Also use size information
             DbgClearAutoLabelRange(start, end);
             if (!DbgSetAutoLabelAt(start, s.name.c_str())) {
-                dputs("Failed to set label/object name!");
+                dputs(fmt::format("Failed to set label/object name for {} at {:016x}!", s.name, start).c_str());
             }
             break;
         }
@@ -167,6 +167,10 @@ static void cbPopulateDebugInfo(CBTYPE type, void *cbInfo) {
                 auto hdrs = c.queryFunctionHeaders();
                 for (const auto hdr : hdrs) {
                     addSymbol(hdr, CTX.modInfo.addr);
+                }
+                auto globals = c.queryGlobalVars();
+                for (const auto g : globals) {
+                    addSymbol(g, CTX.modInfo.addr);
                 }
             }
         } catch (const std::exception &e) {
