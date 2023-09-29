@@ -34,7 +34,7 @@ x32: install
 	set -euxo pipefail
 	export WINEPREFIX="$(pwd)/.wine"
 	export WINEDEBUG="-all"
-	wine x64dbg/release/x32/x32dbg.exe "$(pwd)/../../winrar/WinRAR.exe"
+	wine x64dbg/release/x32/x32dbg.exe
 
 # Launch x64dbg with plugin loaded
 x64: install
@@ -43,6 +43,15 @@ x64: install
 	export WINEPREFIX="$(pwd)/.wine"
 	export WINEDEBUG="-all"
 	wine x64dbg/release/x64/x64dbg.exe
+
+# Package into release zip
+package: build-x32 build-x64
+	#!/usr/bin/env bash
+	mkdir -p pkg && cd pkg
+	cp ../build-x32/decomp2dbg.dp32 .
+	cp ../build-x64/decomp2dbg.dp64 .
+	zip -r decomp2dbg.zip *
+	cd ../
 
 # Build and run a demo program for the actual XML-RPC client
 demo:
