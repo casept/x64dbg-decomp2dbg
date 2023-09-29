@@ -1,0 +1,29 @@
+name: Build
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/casept/x64dbg-decomp2dbg-ci:latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Build
+        run: just package
+      - name: Upload package
+        uses: actions/upload-artifact@v3
+        with:
+          name: decomp2dbg.zip
+          path: pkg/decomp2dbg.zip

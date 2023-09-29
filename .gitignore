@@ -4,6 +4,7 @@ build*/
 .cache/
 .wine/
 cmake-build-*/
+pkg/
 /CMakeSettings.json
 compile_commands.json
 x64dbg/release/

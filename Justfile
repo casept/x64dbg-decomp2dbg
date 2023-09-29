@@ -67,3 +67,4 @@ clean:
 	rm -rf build-x32/
 	rm -rf build-x64/
 	rm -rf build-demo/
+	rm -rf pkg/

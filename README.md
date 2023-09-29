@@ -1,5 +1,7 @@
 # decomp2dbg plugin for x64dbg
 
+[![Build](https://github.com/casept/x64dbg-decomp2dbg/actions/workflows/build.yml/badge.svg)](https://github.com/casept/x64dbg-decomp2dbg/actions/workflows/build.yml)
+
 This plugin implements bridging between decompilers and x64dbg,
 by implementing the [decomp2dbg](https://github.com/mahaloz/decomp2dbg) protocol.
 
