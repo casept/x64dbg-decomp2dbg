@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <xmlrpc-c/base.hpp>
 #include <xmlrpc-c/client_simple.hpp>
@@ -266,4 +267,262 @@ FunctionData Client::queryFunctionData(std::size_t addr) {
 
     log("Function info query done");
     return fd;
+}
+
+std::unordered_map<std::string, Structure> Client::queryStructs() {
+    log("Querying structures...");
+    std::unordered_map<std::string, Structure> structs{};
+    try {
+        xmlrpc_c::clientSimple c{};
+        xmlrpc_c::value out;
+        c.call(m_url, "d2d.structs", &out);
+        log("RPC call OK, processing...");
+        auto top_level = xmlrpc_c::value_struct(out.cValue()).cvalue();
+        // Struct names are the keys
+        for (const auto entry : top_level) {
+            if (entry.first == "struct_info") {
+                log("Processing struct_info");
+                std::cout << entry.second.type() << std::endl;
+                auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
+                for (const auto entry2 : mid_level) {
+                    Structure s;
+                    auto low_level = xmlrpc_c::value_struct(xmlrpc_c::value(entry2).cValue()).cvalue();
+                    for (const auto entry3 : low_level) {
+                        auto key = entry3.first;
+                        log(fmt::format("Structure key: {}", key));
+                        if (key == "name") {
+                            auto name = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(entry3.second).cValue()).cvalue());
+                            log(fmt::format("Structure name: {}", name));
+                            s.name = name;
+                        } else if (key == "members") {
+                            log("Parsing struct members");
+                            auto members = xmlrpc_c::value_array(entry3.second.cValue()).cvalue();
+                            for (const auto member : members) {
+                                StructureMember sm;
+                                auto member_xml = xmlrpc_c::value_struct(xmlrpc_c::value(member).cValue()).cvalue();
+                                for (const auto field : member_xml) {
+                                    log(fmt::format("Parsing structure Member field {}", field.first));
+                                    if (field.first == "name") {
+                                        auto name = static_cast<std::string>(
+                                            xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Structure member name: {}", name));
+                                        sm.name = name;
+                                    } else if (field.first == "size") {
+                                        auto size = static_cast<std::size_t>(
+                                            xmlrpc_c::value_int(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Structure member size: {}", size));
+                                        sm.size = size;
+                                    } else if (field.first == "type") {
+                                        auto type = static_cast<std::string>(
+                                            xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Structure member type: {}", type));
+                                        sm.type = type;
+                                    } else {
+                                        throw std::runtime_error(
+                                            fmt::format("Encountered unknown struct member field: {}", field.first));
+                                    }
+                                }
+                                s.members.push_back(sm);
+                            }
+                        } else {
+                            throw std::runtime_error(fmt::format("Unknown top-level key: {}", key));
+                        }
+                    }
+                    structs[s.name] = s;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        throw std::runtime_error(fmt::format("Failed to query structures: {}", e.what()));
+    }
+
+    log("Structure query done");
+    return structs;
+}
+
+std::unordered_map<std::string, Union> Client::queryUnions() {
+    log("Querying unions...");
+    std::unordered_map<std::string, Union> unions{};
+    try {
+        xmlrpc_c::clientSimple c{};
+        xmlrpc_c::value out;
+        c.call(m_url, "d2d.unions", &out);
+        log("RPC call OK, processing...");
+        auto top_level = xmlrpc_c::value_struct(out.cValue()).cvalue();
+        for (const auto entry : top_level) {
+            if (entry.first == "union_info") {
+                log("Processing union_info");
+                std::cout << entry.second.type() << std::endl;
+                auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
+                for (const auto entry2 : mid_level) {
+                    Union u;
+                    auto low_level = xmlrpc_c::value_struct(xmlrpc_c::value(entry2).cValue()).cvalue();
+                    for (const auto entry3 : low_level) {
+                        auto key = entry3.first;
+                        log(fmt::format("Union key: {}", key));
+                        if (key == "name") {
+                            auto name = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(entry3.second).cValue()).cvalue());
+                            log(fmt::format("Union name: {}", name));
+                            u.name = name;
+                        } else if (key == "members") {
+                            log("Parsing union members");
+                            auto members = xmlrpc_c::value_array(entry3.second.cValue()).cvalue();
+                            for (const auto member : members) {
+                                StructureMember sm;
+                                auto member_xml = xmlrpc_c::value_struct(xmlrpc_c::value(member).cValue()).cvalue();
+                                for (const auto field : member_xml) {
+                                    log(fmt::format("Parsing union Member field {}", field.first));
+                                    if (field.first == "name") {
+                                        auto name = static_cast<std::string>(
+                                            xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Union member name: {}", name));
+                                        sm.name = name;
+                                    } else if (field.first == "size") {
+                                        auto size = static_cast<std::size_t>(
+                                            xmlrpc_c::value_int(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Union member size: {}", size));
+                                        sm.size = size;
+                                    } else if (field.first == "type") {
+                                        auto type = static_cast<std::string>(
+                                            xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Union member type: {}", type));
+                                        sm.type = type;
+                                    } else {
+                                        throw std::runtime_error(
+                                            fmt::format("Encountered unknown union member field: {}", field.first));
+                                    }
+                                }
+                                u.members.push_back(sm);
+                            }
+                        } else {
+                            throw std::runtime_error(fmt::format("Unknown top-level key: {}", key));
+                        }
+                    }
+                    unions[u.name] = u;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        throw std::runtime_error(fmt::format("Failed to query unions: {}", e.what()));
+    }
+
+    log("Union query done");
+    return unions;
+}
+
+std::unordered_map<std::string, TypeAlias> Client::queryTypeAliases() {
+    log("Querying type aliases...");
+    std::unordered_map<std::string, TypeAlias> aliases{};
+    try {
+        xmlrpc_c::clientSimple c{};
+        xmlrpc_c::value out;
+        c.call(m_url, "d2d.type_aliases", &out);
+        log("RPC call OK, processing...");
+        auto top_level = xmlrpc_c::value_struct(out.cValue()).cvalue();
+        // Struct names are the keys
+        for (const auto entry : top_level) {
+            if (entry.first == "alias_info") {
+                log("Processing alias_info");
+                std::cout << entry.second.type() << std::endl;
+                auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
+                for (const auto entry2 : mid_level) {
+                    TypeAlias a;
+                    auto low_level = xmlrpc_c::value_struct(xmlrpc_c::value(entry2).cValue()).cvalue();
+                    for (const auto entry3 : low_level) {
+                        auto key = entry3.first;
+                        log(fmt::format("Type alias key: {}", key));
+                        if (key == "name") {
+                            auto name = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(entry3.second).cValue()).cvalue());
+                            log(fmt::format("Type alias name: {}", name));
+                            a.name = name;
+                        } else if (key == "type") {
+                            auto type = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(entry3.second).cValue()).cvalue());
+                            log(fmt::format("Type alias type: {}", type));
+                            a.type = type;
+                        } else if (key == "size") {
+                            // Ignore for now
+                        } else {
+                            throw std::runtime_error(fmt::format("Unknown top-level key: {}", key));
+                        }
+                    }
+                    aliases[a.name] = a;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        throw std::runtime_error(fmt::format("Failed to query type aliases: {}", e.what()));
+    }
+
+    log("Type alias query done");
+    return aliases;
+}
+
+std::unordered_map<std::string, Enum> Client::queryEnums() {
+    log("Querying enums...");
+    std::unordered_map<std::string, Enum> enums{};
+    try {
+        xmlrpc_c::clientSimple c{};
+        xmlrpc_c::value out;
+        c.call(m_url, "d2d.enums", &out);
+        log("RPC call OK, processing...");
+        auto top_level = xmlrpc_c::value_struct(out.cValue()).cvalue();
+        for (const auto entry : top_level) {
+            if (entry.first == "enum_info") {
+                log("Processing enum_info");
+                std::cout << entry.second.type() << std::endl;
+                auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
+                for (const auto entry2 : mid_level) {
+                    Enum e;
+                    auto low_level = xmlrpc_c::value_struct(xmlrpc_c::value(entry2).cValue()).cvalue();
+                    for (const auto entry3 : low_level) {
+                        auto key = entry3.first;
+                        log(fmt::format("Enum key: {}", key));
+                        if (key == "name") {
+                            auto name = static_cast<std::string>(
+                                xmlrpc_c::value_string(xmlrpc_c::value(entry3.second).cValue()).cvalue());
+                            log(fmt::format("Enum name: {}", name));
+                            e.name = name;
+                        } else if (key == "members") {
+                            log("Parsing enum members");
+                            auto members = xmlrpc_c::value_array(entry3.second.cValue()).cvalue();
+                            for (const auto member : members) {
+                                EnumMember em;
+                                auto member_xml = xmlrpc_c::value_struct(xmlrpc_c::value(member).cValue()).cvalue();
+                                for (const auto field : member_xml) {
+                                    log(fmt::format("Parsing enum member field {}", field.first));
+                                    if (field.first == "name") {
+                                        auto name = static_cast<std::string>(
+                                            xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Enum member name: {}", name));
+                                        em.name = name;
+                                    } else if (field.first == "value") {
+                                        auto value = static_cast<std::size_t>(
+                                            xmlrpc_c::value_int(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Enum member value: {}", value));
+                                        em.value = value;
+                                    } else {
+                                        throw std::runtime_error(
+                                            fmt::format("Encountered unknown enum member field: {}", field.first));
+                                    }
+                                }
+                                e.members.push_back(em);
+                            }
+                        } else {
+                            throw std::runtime_error(fmt::format("Unknown top-level key: {}", key));
+                        }
+                    }
+                    enums[e.name] = e;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        throw std::runtime_error(fmt::format("Failed to query enums: {}", e.what()));
+    }
+
+    log("Enum query done");
+    return enums;
 }

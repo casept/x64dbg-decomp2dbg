@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <variant>
 #include <vector>
 #include <xmlrpc-c/base.hpp>
 #include <xmlrpc-c/client_simple.hpp>
@@ -44,6 +46,39 @@ struct FunctionData {
     std::vector<RegVar> reg_vars;
 };
 
+struct StructureMember {
+    std::string name;
+    std::string type;
+    std::size_t size;
+};
+
+struct Structure {
+    std::string name;
+    std::vector<StructureMember> members;
+};
+
+struct TypeAlias {
+    std::string name;
+    std::string type;
+};
+
+struct Union {
+    std::string name;
+    std::vector<StructureMember> members;
+};
+
+struct EnumMember {
+    std::string name;
+    std::size_t value;
+};
+
+struct Enum {
+    std::string name;
+    std::vector<EnumMember> members;
+};
+
+typedef std::variant<TypeAlias, Structure, Union, Enum> Type;
+
 class Client {
    public:
     Client() = delete;
@@ -61,6 +96,14 @@ class Client {
     FunctionData queryFunctionData(std::size_t addr);
     /// Query global variables.
     std::vector<Symbol> queryGlobalVars();
+    /// Query structures.
+    std::unordered_map<std::string, Structure> queryStructs();
+    /// Query type aliases.
+    std::unordered_map<std::string, TypeAlias> queryTypeAliases();
+    /// Query all unions.
+    std::unordered_map<std::string, Union> queryUnions();
+    /// Query all enums.
+    std::unordered_map<std::string, Enum> queryEnums();
 
    private:
     void log(const std::string& msg);
