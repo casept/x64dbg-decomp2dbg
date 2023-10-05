@@ -20,7 +20,9 @@ add_subdirectory(fmt EXCLUDE_FROM_ALL)
 add_subdirectory(client EXCLUDE_FROM_ALL)
 
 add_library(decomp2dbg SHARED
+  src/graph.cpp
   src/modules.cpp
+  src/types.cpp
   src/plugin.cpp
   src/pluginmain.cpp
 )

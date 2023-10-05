@@ -16,6 +16,7 @@
 
 #include "plugin.h"
 #include "modules.h"
+#include "types.h"
 
 #include <pluginsdk/_plugins.h>
 #include <pluginsdk/bridgemain.h>
@@ -221,27 +222,77 @@ static void cbPopulateDebugInfo(CBTYPE type, void *cbInfo) {
             }
         }
 
+        Client c(CTX.apiUrl.c_str());
         try {
-            Client c(CTX.apiUrl.c_str());
             c.ping();
+        } catch (const std::exception &e) {
+            dputs(fmt::format("Failed to ping server: {}", e.what()).c_str());
+            return;
+        }
 
-            if (CTX.ready) {
+        if (CTX.ready) {
+            // Query type information
+            std::unordered_map<std::string, Type> types{};
+            try {
                 // Now we're at a point where our debug info won't be lost, populate it
+                dputs("Querying structs...");
+                auto structs = c.queryStructs();
+                // Can't just merge() because it needs to be converted to the type variant first
+                for (const auto [name, s] : structs) {
+                    types.insert({name, Type(s)});
+                }
+                // Same for unions
+                dputs("Querying unions...");
+                auto unions = c.queryUnions();
+                for (const auto [name, u] : unions) {
+                    types.insert({name, Type(u)});
+                }
+                // Same for enums
+                dputs("Querying enums...");
+                auto enums = c.queryEnums();
+                for (const auto [name, e] : enums) {
+                    types.insert({name, Type(e)});
+                }
+                // Same for type aliases
+                dputs("Querying type aliases...");
+                auto aliases = c.queryTypeAliases();
+                for (const auto [name, a] : aliases) {
+                    types.insert({name, Type(a)});
+                }
+            } catch (const std::exception &e) {
+                dputs(fmt::format("Failed to query types from server: {}", e.what()).c_str());
+            }
+
+            // Insert types into x64dbg
+            try {
+                dputs("Populating types...");
+                if (!addTypes(types)) {
+                    dputs("Failed to populate types!");
+                }
+            } catch (const std::exception &e) {
+                dputs(fmt::format("Failed to populate types: {}", e.what()).c_str());
+            }
+
+            try {
                 auto hdrs = c.queryFunctionHeaders();
                 dputs("Populating functions...");
                 for (const auto hdr : hdrs) {
                     addSymbol(hdr, CTX.modInfo.addr);
                 }
+            } catch (const std::exception &e) {
+                dputs(fmt::format("Failed to query function headers from server: {}", e.what()).c_str());
+            }
+
+            try {
                 dputs("Populating globals...");
                 auto globals = c.queryGlobalVars();
                 for (const auto g : globals) {
                     addSymbol(g, CTX.modInfo.addr);
                 }
-                dputs("Done");
+            } catch (const std::exception &e) {
+                dputs(fmt::format("Failed to query globals from server: {}", e.what()).c_str());
             }
-        } catch (const std::exception &e) {
-            dputs(fmt::format("Failed to query function headers from server: {}", e.what()).c_str());
-            return;
+            dputs("Done");
         }
     }
 }

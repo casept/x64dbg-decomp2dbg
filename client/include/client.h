@@ -50,6 +50,7 @@ struct StructureMember {
     std::string name;
     std::string type;
     std::size_t size;
+    std::size_t offset;
 };
 
 struct Structure {

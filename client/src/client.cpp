@@ -282,7 +282,6 @@ std::unordered_map<std::string, Structure> Client::queryStructs() {
         for (const auto entry : top_level) {
             if (entry.first == "struct_info") {
                 log("Processing struct_info");
-                std::cout << entry.second.type() << std::endl;
                 auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
                 for (const auto entry2 : mid_level) {
                     Structure s;
@@ -308,16 +307,21 @@ std::unordered_map<std::string, Structure> Client::queryStructs() {
                                             xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
                                         log(fmt::format("Structure member name: {}", name));
                                         sm.name = name;
-                                    } else if (field.first == "size") {
-                                        auto size = static_cast<std::size_t>(
-                                            xmlrpc_c::value_int(xmlrpc_c::value(field.second).cValue()).cvalue());
-                                        log(fmt::format("Structure member size: {}", size));
-                                        sm.size = size;
                                     } else if (field.first == "type") {
                                         auto type = static_cast<std::string>(
                                             xmlrpc_c::value_string(xmlrpc_c::value(field.second).cValue()).cvalue());
                                         log(fmt::format("Structure member type: {}", type));
                                         sm.type = type;
+                                    } else if (field.first == "size") {
+                                        auto size = static_cast<std::size_t>(
+                                            xmlrpc_c::value_int(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Structure member size: {}", size));
+                                        sm.size = size;
+                                    } else if (field.first == "offset") {
+                                        auto offset = static_cast<std::size_t>(
+                                            xmlrpc_c::value_int(xmlrpc_c::value(field.second).cValue()).cvalue());
+                                        log(fmt::format("Structure member offset: {}", offset));
+                                        sm.offset = offset;
                                     } else {
                                         throw std::runtime_error(
                                             fmt::format("Encountered unknown struct member field: {}", field.first));
@@ -353,7 +357,6 @@ std::unordered_map<std::string, Union> Client::queryUnions() {
         for (const auto entry : top_level) {
             if (entry.first == "union_info") {
                 log("Processing union_info");
-                std::cout << entry.second.type() << std::endl;
                 auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
                 for (const auto entry2 : mid_level) {
                     Union u;
@@ -371,6 +374,7 @@ std::unordered_map<std::string, Union> Client::queryUnions() {
                             auto members = xmlrpc_c::value_array(entry3.second.cValue()).cvalue();
                             for (const auto member : members) {
                                 StructureMember sm;
+                                sm.offset = 0;
                                 auto member_xml = xmlrpc_c::value_struct(xmlrpc_c::value(member).cValue()).cvalue();
                                 for (const auto field : member_xml) {
                                     log(fmt::format("Parsing union Member field {}", field.first));
@@ -425,7 +429,6 @@ std::unordered_map<std::string, TypeAlias> Client::queryTypeAliases() {
         for (const auto entry : top_level) {
             if (entry.first == "alias_info") {
                 log("Processing alias_info");
-                std::cout << entry.second.type() << std::endl;
                 auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
                 for (const auto entry2 : mid_level) {
                     TypeAlias a;
@@ -473,7 +476,6 @@ std::unordered_map<std::string, Enum> Client::queryEnums() {
         for (const auto entry : top_level) {
             if (entry.first == "enum_info") {
                 log("Processing enum_info");
-                std::cout << entry.second.type() << std::endl;
                 auto mid_level = xmlrpc_c::value_array(xmlrpc_c::value(entry.second).cValue()).cvalue();
                 for (const auto entry2 : mid_level) {
                     Enum e;
